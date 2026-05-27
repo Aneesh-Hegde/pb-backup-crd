@@ -1,0 +1,9 @@
+apiVersion: core.pointblank.com/v1alpha1
+kind: Backup
+metadata:
+  labels:
+    app.kubernetes.io/name: pb-backup-crd-code
+    app.kubernetes.io/managed-by: kustomize
+  name: backup-sample
+spec:
+  # TODO(user): Add fields here
