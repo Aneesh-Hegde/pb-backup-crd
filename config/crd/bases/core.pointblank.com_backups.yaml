@@ -37,6 +37,8 @@ spec:
             type: object
           spec:
             properties:
+              backupScript:
+                type: string
               bucketName:
                 type: string
               credentialsSecret:
@@ -198,6 +200,10 @@ spec:
                   type: object
                 type: array
               endpoint:
+                type: string
+              image:
+                type: string
+              mountPath:
                 type: string
               retentionDays:
                 type: integer

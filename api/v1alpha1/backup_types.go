@@ -21,6 +21,15 @@ type BackupSpec struct {
 
 	// +kubebuilder:validation:Optional
 	RetentionDays int `json:"retentionDays,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	MountPath string `json:"mountPath,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	Image string `json:"image,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	BackupScript string `json:"backupScript,omitempty"`
 }
 
 type BackupStatus struct {

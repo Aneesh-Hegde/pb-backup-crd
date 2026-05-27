@@ -29,6 +29,8 @@ type BackupReconciler struct {
 func (r *BackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
+	logger.Info("🚨 TRIPWIRE: I HAVE A BRAIN!", "Target", req.Name)
+
 	// 1. Fetch the Backup instance
 	var backup corev1alpha1.Backup
 	if err := r.Get(ctx, req.NamespacedName, &backup); err != nil {
@@ -40,7 +42,114 @@ func (r *BackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	logger.Info("Reconciling Backup definition", "App", backup.Spec.TargetApp)
 
-	// 2. Define the CronJob
+	// ==========================================
+	// 2. DYNAMIC FALLBACKS & DEFAULTS
+	// ==========================================
+	mountPath := backup.Spec.MountPath
+	if mountPath == "" {
+		mountPath = "/data"
+	}
+
+	image := backup.Spec.Image
+	if image == "" {
+		image = "amazon/aws-cli:latest"
+	}
+
+	endpoint := backup.Spec.Endpoint
+	if endpoint == "" {
+		endpoint = "http://garage.garage.svc.cluster.local:3906"
+	}
+
+	// ==========================================
+	// 3. MERGE ENVIRONMENT VARIABLES
+	// ==========================================
+	envVars := []corev1.EnvVar{
+		{
+			Name: "AWS_ACCESS_KEY_ID",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: backup.Spec.CredentialsSecret},
+					Key:                  "AWS_ACCESS_KEY_ID",
+				},
+			},
+		},
+		{
+			Name: "AWS_SECRET_ACCESS_KEY",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: backup.Spec.CredentialsSecret},
+					Key:                  "AWS_SECRET_ACCESS_KEY",
+				},
+			},
+		},
+		{
+			Name:  "AWS_DEFAULT_REGION",
+			Value: "us-east-1",
+		},
+	}
+
+	// Append custom database credentials if provided
+	if len(backup.Spec.DatabaseEnv) > 0 {
+		envVars = append(envVars, backup.Spec.DatabaseEnv...)
+	}
+
+	// ==========================================
+	// 4. CONSTRUCT THE BACKUP SCRIPT
+	// ==========================================
+
+	// A. Application Dump Logic
+	appDumpLogic := backup.Spec.BackupScript
+	if appDumpLogic == "" {
+		appDumpLogic = fmt.Sprintf(`
+echo "Performing default file-level tar backup..."
+tar -czf /tmp/$FILENAME -C %s .
+`, mountPath)
+	}
+
+	// B. Storage Upload Logic (Operator Controlled)
+	s3UploadLogic := fmt.Sprintf(`
+echo "Uploading to S3 bucket: %s..."
+aws s3 cp /tmp/$FILENAME s3://%s/$FILENAME --endpoint-url %s
+`, backup.Spec.BucketName, backup.Spec.BucketName, endpoint)
+
+	// C. Retention/Sharding Logic (Operator Controlled)
+	retentionLogic := ""
+	if backup.Spec.RetentionDays > 0 {
+		retentionLogic = fmt.Sprintf(`
+echo "Executing Shard/Prune for backups older than %d days..."
+aws s3api list-objects --bucket %s --endpoint-url %s \
+  --query "Contents[?LastModified<='\$(date -d '-%d days' -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)'].[Key]" \
+  --output text | while read -r key; do
+  if [ -n "\$key" ] && [ "\$key" != "None" ]; then
+    echo "Deleting old backup: \$key"
+    aws s3 rm s3://%s/"\$key" --endpoint-url %s
+  fi
+done
+`, backup.Spec.RetentionDays, backup.Spec.BucketName, endpoint, backup.Spec.RetentionDays, backup.Spec.BucketName, endpoint)
+	}
+
+	// D. Combine into final executable script
+	finalScript := fmt.Sprintf(`
+set -e
+echo "Starting backup for %s..."
+TIMESTAMP=$(date +%%Y%%m%%d-%%H%%M%%S)
+FILENAME="%s-backup-$TIMESTAMP.tar.gz"
+
+# 1. APPLICATION SPECIFIC DUMP
+%s
+
+# 2. STORAGE UPLOAD
+%s
+
+# 3. RETENTION POLICY
+%s
+
+echo "Backup process completed successfully!"
+`, backup.Spec.TargetApp, backup.Spec.TargetApp, appDumpLogic, s3UploadLogic, retentionLogic)
+
+	// ==========================================
+	// 5. DEFINE THE CRONJOB
+	// ==========================================
 	cronJobName := fmt.Sprintf("%s-cronjob", backup.Name)
 	cronJob := &batchv1.CronJob{
 		ObjectMeta: metav1.ObjectMeta{
@@ -55,14 +164,29 @@ func (r *BackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 						Spec: corev1.PodSpec{
 							RestartPolicy: corev1.RestartPolicyOnFailure,
 							Containers: []corev1.Container{{
-								Name:  "backup-agent",
-								Image: "amazon/aws-cli:latest",
-								Command: []string{
-									"/bin/sh",
-									"-c",
-									fmt.Sprintf("echo 'Backing up %s to %s...'", backup.Spec.SourcePVCName, backup.Spec.BucketName),
+								Name:    "backup-agent",
+								Image:   image,
+								Env:     envVars,
+								Command: []string{"/bin/sh", "-c"},
+								Args:    []string{finalScript},
+								VolumeMounts: []corev1.VolumeMount{
+									{
+										Name:      "data-volume",
+										MountPath: mountPath,
+										ReadOnly:  true,
+									},
 								},
 							}},
+							Volumes: []corev1.Volume{
+								{
+									Name: "data-volume",
+									VolumeSource: corev1.VolumeSource{
+										PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+											ClaimName: backup.Spec.SourcePVCName,
+										},
+									},
+								},
+							},
 						},
 					},
 				},
@@ -70,12 +194,13 @@ func (r *BackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		},
 	}
 
-	// 3. Set OwnerReference (If Backup is deleted, CronJob is deleted)
+	// ==========================================
+	// 6. MANAGE THE CRONJOB LIFECYCLE
+	// ==========================================
 	if err := ctrl.SetControllerReference(&backup, cronJob, r.Scheme); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// 4. Create or Update the CronJob
 	var existingCronJob batchv1.CronJob
 	err := r.Get(ctx, client.ObjectKey{Name: cronJobName, Namespace: backup.Namespace}, &existingCronJob)
 
@@ -87,11 +212,18 @@ func (r *BackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 		logger.Info("Successfully reconciled CronJob", "Operation", "created")
 		return ctrl.Result{}, nil
-	} else if err != nil {
+	} else if err == nil {
+		// The CronJob exists! Update it with the newest spec.
+		existingCronJob.Spec = cronJob.Spec
+		err = r.Update(ctx, &existingCronJob)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		logger.Info("Successfully updated existing CronJob", "CronJob.Name", cronJob.Name)
+		return ctrl.Result{}, nil
+	} else {
 		return ctrl.Result{}, err
 	}
-
-	return ctrl.Result{}, nil
 }
 
 func (r *BackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
