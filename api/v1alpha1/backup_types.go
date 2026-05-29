@@ -9,9 +9,9 @@ type BackupSpec struct {
 	Schedule          string `json:"schedule"`
 	TargetApp         string `json:"targetApp"`
 	SourcePVCName     string `json:"sourcePVCName"`
-	StorageBackend    string `json:"storageBackend"`
-	BucketName        string `json:"bucketName"`
-	CredentialsSecret string `json:"credentialsSecret"`
+	DatabaseType      string `json:"databaseType"` // <--- NEW: Tells the Operator which blueprint to fetch
+	BucketName        string `json:"bucketName,omitempty"`
+	CredentialsSecret string `json:"credentialsSecret,omitempty"`
 
 	// +kubebuilder:validation:Optional
 	Endpoint string `json:"endpoint,omitempty"`
@@ -27,13 +27,18 @@ type BackupSpec struct {
 
 	// +kubebuilder:validation:Optional
 	Image string `json:"image,omitempty"`
-
-	// +kubebuilder:validation:Optional
-	BackupScript string `json:"backupScript,omitempty"`
 }
 
 type BackupStatus struct {
 	LastBackupTime string `json:"lastBackupTime,omitempty"`
+
+	// Conditions represent the latest available observations of the backup's state.
+	// +patchMergeKey=type
+	// +patchStrategy=merge
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 
 // +kubebuilder:object:root=true

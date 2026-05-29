@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-blueprint-postgres
+  namespace: garage
+data:
+  image: "postgres:15"
+  backup.sh: |
+    echo "Initiating PostgreSQL logical backup..."
+    
+    # Ensure required variables are set by the user in the Backup CRD
+    if [ -z "$POSTGRES_HOST" ] || [ -z "$POSTGRES_USER" ] || [ -z "$POSTGRES_PASSWORD" ] || [ -z "$POSTGRES_DB" ]; then
+      echo "Error: Missing required database environment variables."
+      exit 1
+    fi
+
+    # Execute the dump and compress on the fly
+    PGPASSWORD=$POSTGRES_PASSWORD pg_dump -h $POSTGRES_HOST -U $POSTGRES_USER $POSTGRES_DB | gzip > /var/$FILENAME
+    
+    echo "PostgreSQL dump completed successfully."

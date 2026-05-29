@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-blueprint-redis
+  namespace: garage
+data:
+  image: "redis:7.0"
+  backup.sh: |
+    echo "Initiating Redis memory snapshot..."
+    
+    if [ -z "$REDIS_HOST" ]; then
+      echo "Error: Missing REDIS_HOST environment variable."
+      exit 1
+    fi
+
+    # Force Redis to save current memory state to disk synchronously
+    redis-cli -h $REDIS_HOST SAVE
+    
+    # Compress the resulting RDB file
+    gzip -c $MOUNT_PATH/dump.rdb > /var/$FILENAME
+    
+    echo "Redis snapshot completed successfully."

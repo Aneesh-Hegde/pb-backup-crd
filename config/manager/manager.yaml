@@ -63,8 +63,16 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
-        image: controller:latest
-        imagePullPolicy: IfNotPresent
+        env:
+          - name: GARAGE_ADMIN_ENDPOINT
+            value: "http://garage.garage.svc.cluster.local:3903"
+          - name: GARAGE_ADMIN_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: garage-secret  # The name of the secret
+                key: admin_token
+        image: celebi7110/pb-backup-operator:latest
+        imagePullPolicy: Always
         name: manager
         ports: []
         securityContext:

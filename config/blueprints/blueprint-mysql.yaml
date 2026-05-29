@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-blueprint-mysql
+  namespace: garage
+data:
+  image: "mysql:8.0"
+  backup.sh: |
+    echo "Initiating MySQL/MariaDB logical backup..."
+    
+    if [ -z "$MYSQL_HOST" ] || [ -z "$MYSQL_USER" ] || [ -z "$MYSQL_PASSWORD" ] || [ -z "$MYSQL_DATABASE" ]; then
+      echo "Error: Missing required database environment variables."
+      exit 1
+    fi
+
+    # Execute the dump and compress on the fly
+    mysqldump -h $MYSQL_HOST -u $MYSQL_USER -p$MYSQL_PASSWORD $MYSQL_DATABASE | gzip > /var/$FILENAME
+    
+    echo "MySQL dump completed successfully."

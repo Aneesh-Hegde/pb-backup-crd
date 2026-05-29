@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-blueprint-sqlite
+  namespace: garage
+data:
+  image: "keinos/sqlite3:latest"
+  backup.sh: |
+    echo "Initiating safe SQLite hot-copy..."
+    
+    TARGET_DB="$MOUNT_PATH/${SQLITE_FILE:-db.sqlite3}"
+    
+    if [ ! -f "$TARGET_DB" ]; then
+      echo "Error: SQLite database not found at $TARGET_DB"
+      exit 1
+    fi
+
+    # The .backup command safely locks and copies the live database
+    sqlite3 "$TARGET_DB" ".backup '/var/$FILENAME'"
+    
+    echo "SQLite backup completed successfully."

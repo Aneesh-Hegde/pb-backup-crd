@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-blueprint-default
+  namespace: garage
+data:
+  image: "amazon/aws-cli:latest"
+  backup.sh: |
+    echo "Initiating standard flat-file volume backup..."
+    
+    # Compress the entire mounted directory into a tarball
+    tar -czf /var/$FILENAME -C $MOUNT_PATH .
+    
+    echo "Volume tarball created successfully."

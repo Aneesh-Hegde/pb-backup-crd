@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-blueprint-mongodb
+  namespace: garage
+data:
+  image: "mongo:6.0"
+  backup.sh: |
+    echo "Initiating MongoDB archive backup..."
+    
+    if [ -z "$MONGO_HOST" ]; then
+      echo "Error: Missing MONGO_HOST environment variable."
+      exit 1
+    fi
+
+    # mongodump supports native gzipping to a single archive file
+    mongodump --uri="$MONGO_HOST" --archive=/var/$FILENAME --gzip
+    
+    echo "MongoDB dump completed successfully."
